@@ -62,6 +62,7 @@ try {
         --clean `
         --onefile `
         --name mini_httpserver_pyinstaller `
+        --add-data "vendor;vendor" `
         --distpath dist_pyinstaller `
         --workpath build_pyinstaller `
         --specpath build_pyinstaller `

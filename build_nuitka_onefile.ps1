@@ -57,6 +57,7 @@ try {
         --assume-yes-for-downloads `
         --output-dir=dist_nuitka `
         --output-filename=mini_httpserver_nuitka.exe `
+        --include-data-dir=vendor=vendor `
         --remove-output `
         --lto=yes `
         --show-progress `

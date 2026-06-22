@@ -1,4 +1,4 @@
-﻿import http.server
+import http.server
 import argparse
 import html
 import hashlib
@@ -17,10 +17,32 @@ from string import ascii_lowercase
 from urllib.parse import parse_qs, urlencode, urlsplit, unquote
 
 VERSION = "1.3.0"
-BUILD_TIMESTAMP = ""
-BUILDBY = ""
+BUILD_TIMESTAMP = "2026-06-22 16:27:58"
+BUILDBY = "Nuitka"
 LOCAL_JSZIP_ROUTE = "/__assets/jszip.min.js"
-LOCAL_JSZIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "jszip.min.js")
+
+
+def resolve_local_jszip_file():
+    candidates = []
+
+    # 源码运行路径
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "jszip.min.js"))
+
+    # PyInstaller onefile/onedir 常见资源路径
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        candidates.append(os.path.join(meipass, "vendor", "jszip.min.js"))
+
+    # 兜底：可执行文件同级目录
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "vendor", "jszip.min.js"))
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    # 返回首选路径用于报错显示
+    return candidates[0]
 
 # 1. 获取并显示所有启用的网卡 IPv4 地址
 def show_ip_addresses():
@@ -231,12 +253,13 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def _serve_local_jszip(self):
-        if not os.path.exists(LOCAL_JSZIP_FILE):
+        local_jszip_file = resolve_local_jszip_file()
+        if not os.path.exists(local_jszip_file):
             self._send_utf8_error(404, bi("本地 JSZip 资源缺失", "Local JSZip asset not found"))
             return
 
         try:
-            with open(LOCAL_JSZIP_FILE, "rb") as f:
+            with open(local_jszip_file, "rb") as f:
                 data = f.read()
         except OSError as exc:
             self._send_utf8_error(500, bi(f"读取 JSZip 失败: {exc}", f"Failed to read JSZip: {exc}"))
