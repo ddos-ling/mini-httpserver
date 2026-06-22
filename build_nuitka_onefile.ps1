@@ -7,6 +7,18 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+function Write-TextFileExact {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    # 按原字符串精确写回，避免 Set-Content 自动补终止换行。
+    [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
+}
+
 function Update-BuildMetadata {
     param(
         [string]$TargetFile,
@@ -17,7 +29,7 @@ function Update-BuildMetadata {
     $content = Get-Content -Path $TargetFile -Raw -Encoding UTF8
     $content = [regex]::Replace($content, '^(BUILD_TIMESTAMP\s*=\s*).*$', ('$1"' + $timestamp + '"'), [System.Text.RegularExpressions.RegexOptions]::Multiline)
     $content = [regex]::Replace($content, '^(BUILDBY\s*=\s*).*$', ('$1"' + $ToolName + '"'), [System.Text.RegularExpressions.RegexOptions]::Multiline)
-    Set-Content -Path $TargetFile -Value $content -Encoding UTF8
+    Write-TextFileExact -Path $TargetFile -Content $content
 
     Write-Host "Build metadata updated: BUILDBY=$ToolName, BUILD_TIMESTAMP=$timestamp" -ForegroundColor Cyan
 }
@@ -28,7 +40,7 @@ function Restore-OriginalContent {
         [string]$OriginalContent
     )
 
-    Set-Content -Path $TargetFile -Value $OriginalContent -Encoding UTF8
+    Write-TextFileExact -Path $TargetFile -Content $OriginalContent
     Write-Host "Source metadata restored: $TargetFile" -ForegroundColor DarkGray
 }
 
