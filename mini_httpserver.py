@@ -641,7 +641,7 @@ if __name__ == "__main__":
 
                 print(f"-> 轻量化 Web 服务器已启动！")
                 print(f"-> 版本: {VERSION} by DDoS_LING")
-                if not BUILD_TIMESTAMP and BUILDBY:
+                if BUILD_TIMESTAMP and BUILDBY:
                     print(f"-> Build by {BUILDBY} at {BUILD_TIMESTAMP}")
                 print(f"-> 工作目录：{os.getcwd()}")
                 print(f"-> 本地访问地址: http://localhost:{PORT}")
@@ -668,6 +668,8 @@ if __name__ == "__main__":
             print(f"启动服务器失败, 尝试新端口{PORT}")
     else:
         print("错误：无法启动服务器，所有尝试的端口都被占用。请尝试手动指定一个未被占用的端口。")
+
+
 
 
 

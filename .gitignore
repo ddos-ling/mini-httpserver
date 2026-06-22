@@ -1,6 +1,9 @@
 # PyInstaller 打包文件
 build/
 dist/
+build_pyinstaller/
+dist_pyinstaller/
+dist_nuitka/
 *.spec
 
 # Python 字节码文件
