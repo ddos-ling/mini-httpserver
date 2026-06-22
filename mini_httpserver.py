@@ -16,7 +16,7 @@ from random import randint, choices
 from string import ascii_lowercase
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 BUILD_TIMESTAMP = ""
 BUILDBY = ""
 
@@ -388,6 +388,22 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404, "No permission to list directory")
             return None
 
+        def format_size(num_bytes):
+            if num_bytes < 0:
+                return "-"
+            units = ["B", "KB", "MB", "GB", "TB"]
+            size = float(num_bytes)
+            unit_index = 0
+            while size >= 1024 and unit_index < len(units) - 1:
+                size /= 1024
+                unit_index += 1
+            if unit_index == 0:
+                return f"{int(size)} {units[unit_index]}"
+            return f"{size:.2f} {units[unit_index]}"
+
+        def format_mtime(timestamp):
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+
         parsed_request = urlsplit(self.path)
         request_path = parsed_request.path or "/"
         request_query = parse_qs(parsed_request.query)
@@ -417,13 +433,24 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         page.write("<p><button type='submit'>上传到当前目录</button></p>")
         page.write("</form>")
         page.write("</div><hr>")
-        page.write("<ul>")
+        page.write("<table style='border-collapse:collapse;min-width:720px;'>")
+        page.write("<thead><tr>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;'>名称</th>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;'>修改时间</th>")
+        page.write("<th style='text-align:right;border-bottom:1px solid #ccc;padding:6px 10px;'>大小</th>")
+        page.write("</tr></thead><tbody>")
 
         if request_path not in ("/", ""):
             parent = os.path.dirname(request_path.rstrip("/"))
             if not parent:
                 parent = "/"
-            page.write(f"<li><a href='{html.escape(parent)}'>.. (上级目录)</a></li>")
+            page.write(
+                "<tr>"
+                f"<td style='padding:6px 10px;'><a href='{html.escape(parent, quote=True)}'>.. (上级目录)</a></td>"
+                "<td style='padding:6px 10px;'>-</td>"
+                "<td style='padding:6px 10px;text-align:right;'>-</td>"
+                "</tr>"
+            )
 
         for name in entries:
             full_name = os.path.join(path, name)
@@ -434,15 +461,32 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             elif os.path.islink(full_name):
                 display_name = name + "@"
 
+            try:
+                stat_result = os.stat(full_name)
+                modified_time = format_mtime(stat_result.st_mtime)
+                if os.path.isdir(full_name):
+                    size_text = "-"
+                else:
+                    size_text = format_size(stat_result.st_size)
+            except OSError:
+                modified_time = "-"
+                size_text = "-"
+
             page.write(
-                "<li><a href='%s'>%s</a></li>"
+                "<tr>"
+                "<td style='padding:6px 10px;'><a href='%s'>%s</a></td>"
+                "<td style='padding:6px 10px;'>%s</td>"
+                "<td style='padding:6px 10px;text-align:right;'>%s</td>"
+                "</tr>"
                 % (
                     html.escape(link_name, quote=True),
                     html.escape(display_name, quote=False),
+                    html.escape(modified_time, quote=False),
+                    html.escape(size_text, quote=False),
                 )
             )
 
-        page.write("</ul>")
+        page.write("</tbody></table>")
         page.write("<script>")
         page.write("function toggleUploadArea(){")
         page.write("var area=document.getElementById('uploadArea');")
