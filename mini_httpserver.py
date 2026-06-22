@@ -14,11 +14,13 @@ from email.parser import BytesParser
 from email.policy import default
 from random import randint, choices
 from string import ascii_lowercase
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, unquote
 
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 BUILD_TIMESTAMP = ""
 BUILDBY = ""
+LOCAL_JSZIP_ROUTE = "/__assets/jszip.min.js"
+LOCAL_JSZIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "jszip.min.js")
 
 # 1. 获取并显示所有启用的网卡 IPv4 地址
 def show_ip_addresses():
@@ -221,6 +223,32 @@ def apply_runtime_config():
 class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     """在目录浏览页中增加上传功能，并校验控制台授权码。"""
 
+    def do_GET(self):
+        parsed = urlsplit(self.path)
+        if (parsed.path or "") == LOCAL_JSZIP_ROUTE:
+            self._serve_local_jszip()
+            return
+        super().do_GET()
+
+    def _serve_local_jszip(self):
+        if not os.path.exists(LOCAL_JSZIP_FILE):
+            self._send_utf8_error(404, bi("本地 JSZip 资源缺失", "Local JSZip asset not found"))
+            return
+
+        try:
+            with open(LOCAL_JSZIP_FILE, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            self._send_utf8_error(500, bi(f"读取 JSZip 失败: {exc}", f"Failed to read JSZip: {exc}"))
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/javascript; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=31536000")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _get_lockout_remaining_seconds(self, now):
         if not ENABLE_REJECT_LOCKOUT or REJECT_COUNT_THRESHOLD <= 0 or REJECT_LOCKOUT_SECONDS <= 0:
             return 0
@@ -407,7 +435,7 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         parsed_request = urlsplit(self.path)
         request_path = parsed_request.path or "/"
         request_query = parse_qs(parsed_request.query)
-        display_path = html.escape(request_path, quote=False)
+        display_path = html.escape(unquote(request_path), quote=False)
         encoded_path = html.escape(os.path.abspath(path), quote=False)
 
         error_message = request_query.get("upload_error", [""])[0]
@@ -426,6 +454,12 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 f"<strong>上传被拦截 / Upload Blocked</strong>（{safe_error_code}）：{safe_error_msg}</div>"
             )
         page.write("<p><button type='button' onclick='toggleUploadArea()' id='uploadToggleBtn'>上传文件到当前目录</button></p>")
+        page.write("<p><button type='button' onclick='downloadSelectedFiles()' id='downloadSelectedBtn' disabled>下载选中项（ZIP）</button>")
+        page.write(" <label style='margin-left:10px;'><input type='checkbox' id='selectAllFiles' onchange='toggleSelectAll(this.checked)'>全选</label></p>")
+        page.write("<div id='zipProgressWrap' style='display:none;margin:8px 0 12px 0;max-width:560px;'>")
+        page.write("<div id='zipProgressText' style='font-size:13px;color:#333;margin-bottom:4px;'>准备中...</div>")
+        page.write("<progress id='zipProgressBar' value='0' max='100' style='width:100%;height:14px;'></progress>")
+        page.write("</div>")
         page.write("<div id='uploadArea' style='display:none;'>")
         page.write("<form method='post' enctype='multipart/form-data'>")
         page.write("<p><label>控制台授权码: <input type='password' name='auth_code' required></label></p>")
@@ -435,9 +469,10 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         page.write("</div><hr>")
         page.write("<table id='fileTable' style='border-collapse:collapse;min-width:720px;'>")
         page.write("<thead><tr>")
-        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(0, 'text', this)\">名称</th>")
-        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(1, 'number', this)\">修改时间</th>")
-        page.write("<th style='text-align:right;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(2, 'number', this)\">大小</th>")
+        page.write("<th style='text-align:center;border-bottom:1px solid #ccc;padding:6px 10px;width:70px;'>选择</th>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(1, 'text', this)\">名称</th>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(2, 'number', this)\">修改时间</th>")
+        page.write("<th style='text-align:right;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(3, 'number', this)\">大小</th>")
         page.write("</tr></thead><tbody>")
 
         if request_path not in ("/", ""):
@@ -446,6 +481,7 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 parent = "/"
             page.write(
                 "<tr data-parent='1'>"
+                "<td data-sort='' style='padding:6px 10px;text-align:center;'>-</td>"
                 f"<td data-sort='' style='padding:6px 10px;'><a href='{html.escape(parent, quote=True)}'>.. (上级目录)</a></td>"
                 "<td data-sort='' style='padding:6px 10px;'>-</td>"
                 "<td data-sort='' style='padding:6px 10px;text-align:right;'>-</td>"
@@ -480,11 +516,15 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             page.write(
                 "<tr>"
+                "<td data-sort='' style='padding:6px 10px;text-align:center;'><input type='checkbox' class='fileSelect' value='%s' data-href='%s' data-is-dir='%s' onchange='updateSelectionState()'></td>"
                 "<td data-sort='%s' style='padding:6px 10px;'><a href='%s'>%s</a></td>"
                 "<td data-sort='%s' style='padding:6px 10px;'>%s</td>"
                 "<td data-sort='%s' style='padding:6px 10px;text-align:right;'>%s</td>"
                 "</tr>"
                 % (
+                    html.escape(name, quote=True),
+                    html.escape(link_name, quote=True),
+                    "1" if os.path.isdir(full_name) else "0",
                     html.escape(sort_name, quote=True),
                     html.escape(link_name, quote=True),
                     html.escape(display_name, quote=False),
@@ -497,12 +537,152 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         page.write("</tbody></table>")
         page.write("<script>")
+        page.write("const ZIP_LIB_URL='%s';" % html.escape(LOCAL_JSZIP_ROUTE, quote=True))
+        page.write("function ensureJsZipLoaded(){")
+        page.write("if(window.JSZip){return Promise.resolve(window.JSZip);}")
+        page.write("return new Promise(function(resolve,reject){")
+        page.write("var s=document.createElement('script');")
+        page.write("s.src=ZIP_LIB_URL;")
+        page.write("s.async=true;")
+        page.write("s.onload=function(){if(window.JSZip){resolve(window.JSZip);}else{reject(new Error('JSZip load failed'));}};")
+        page.write("s.onerror=function(){reject(new Error('JSZip script load error'));};")
+        page.write("document.head.appendChild(s);")
+        page.write("});")
+        page.write("}")
         page.write("function toggleUploadArea(){")
         page.write("var area=document.getElementById('uploadArea');")
         page.write("var btn=document.getElementById('uploadToggleBtn');")
         page.write("var hidden=area.style.display==='none';")
         page.write("area.style.display=hidden?'block':'none';")
         page.write("btn.textContent=hidden?'收起上传区':'上传文件到当前目录';")
+        page.write("}")
+        page.write("function getFileCheckboxes(){return Array.from(document.querySelectorAll('.fileSelect'));}")
+        page.write("function updateSelectionState(){")
+        page.write("var checks=getFileCheckboxes();")
+        page.write("var checkedCount=checks.filter(function(c){return c.checked;}).length;")
+        page.write("var allBox=document.getElementById('selectAllFiles');")
+        page.write("var btn=document.getElementById('downloadSelectedBtn');")
+        page.write("if(btn){btn.disabled=checkedCount===0;}")
+        page.write("if(allBox){allBox.checked=checks.length>0&&checkedCount===checks.length;allBox.indeterminate=checkedCount>0&&checkedCount<checks.length;}")
+        page.write("}")
+        page.write("function toggleSelectAll(checked){")
+        page.write("getFileCheckboxes().forEach(function(c){c.checked=checked;});")
+        page.write("updateSelectionState();")
+        page.write("}")
+        page.write("function setZipProgress(visible,text,percent){")
+        page.write("var wrap=document.getElementById('zipProgressWrap');")
+        page.write("var txt=document.getElementById('zipProgressText');")
+        page.write("var bar=document.getElementById('zipProgressBar');")
+        page.write("if(wrap){wrap.style.display=visible?'block':'none';}")
+        page.write("if(txt){txt.textContent=text||'';}")
+        page.write("if(bar){")
+        page.write("var p=Number(percent);if(!Number.isFinite(p)){p=0;}")
+        page.write("if(p<0){p=0;}if(p>100){p=100;}")
+        page.write("bar.value=p;")
+        page.write("}")
+        page.write("}")
+        page.write("function sanitizeZipPathPart(name){")
+        page.write("var s=String(name||'').replace(/[\\\\/:*?\"<>|]/g,'_');")
+        page.write("var out='';")
+        page.write("for(var i=0;i<s.length;i+=1){")
+        page.write("var ch=s.charCodeAt(i);")
+        page.write("out+=ch<32?'_':s[i];")
+        page.write("}")
+        page.write("return out.trim();")
+        page.write("}")
+        page.write("async function fetchDirectoryEntries(dirUrl){")
+        page.write("var resp=await fetch(dirUrl,{credentials:'same-origin'});")
+        page.write("if(!resp.ok){throw new Error('无法读取目录: '+dirUrl);}")
+        page.write("var htmlText=await resp.text();")
+        page.write("var doc=new DOMParser().parseFromString(htmlText,'text/html');")
+        page.write("var rows=Array.from(doc.querySelectorAll('#fileTable tbody tr'));")
+        page.write("var result=[];")
+        page.write("rows.forEach(function(row){")
+        page.write("if(row.getAttribute('data-parent')==='1'){return;}")
+        page.write("var checkbox=row.querySelector('input.fileSelect');")
+        page.write("if(!checkbox){return;}")
+        page.write("var rawName=checkbox.getAttribute('value')||'';")
+        page.write("var href=checkbox.getAttribute('data-href')||'';")
+        page.write("if(!rawName||!href){return;}")
+        page.write("var absUrl=new URL(href,dirUrl).toString();")
+        page.write("result.push({")
+        page.write("name:rawName,")
+        page.write("url:absUrl,")
+        page.write("isDir:checkbox.getAttribute('data-is-dir')==='1'")
+        page.write("});")
+        page.write("});")
+        page.write("return result;")
+        page.write("}")
+        page.write("async function collectFileTasks(entry,prefix,tasks,scanState){")
+        page.write("var safeName=sanitizeZipPathPart(entry.name);")
+        page.write("if(!safeName){return;}")
+        page.write("if(entry.isDir){")
+        page.write("var dirPrefix=prefix+safeName+'/';")
+        page.write("scanState.scanned+=1;")
+        page.write("setZipProgress(true,'正在扫描目录结构... '+scanState.scanned+' 项',Math.min(25,5+scanState.scanned));")
+        page.write("var children=await fetchDirectoryEntries(entry.url);")
+        page.write("for(var i=0;i<children.length;i+=1){")
+        page.write("await collectFileTasks(children[i],dirPrefix,tasks,scanState);")
+        page.write("}")
+        page.write("return;")
+        page.write("}")
+        page.write("tasks.push({")
+        page.write("name:entry.name,")
+        page.write("url:entry.url,")
+        page.write("zipPath:prefix+safeName")
+        page.write("});")
+        page.write("}")
+        page.write("function inferZipName(){")
+        page.write("var parts=window.location.pathname.split('/').filter(function(p){return p;});")
+        page.write("var base=parts.length>0?decodeURIComponent(parts[parts.length-1]):'root';")
+        page.write("base=sanitizeZipPathPart(base)||'download';")
+        page.write("return base+'.zip';")
+        page.write("}")
+        page.write("async function downloadSelectedFiles(){")
+        page.write("var selected=getFileCheckboxes().filter(function(c){return c.checked;}).map(function(c){")
+        page.write("return {name:c.value,url:new URL(c.getAttribute('data-href')||'',window.location.href).toString(),isDir:c.getAttribute('data-is-dir')==='1'};")
+        page.write("});")
+        page.write("if(selected.length===0){alert('请先勾选要下载的文件或目录');return;}")
+        page.write("var btn=document.getElementById('downloadSelectedBtn');")
+        page.write("var oldText=btn?btn.textContent:'';")
+        page.write("try{")
+        page.write("setZipProgress(true,'初始化打包环境...',2);")
+        page.write("if(btn){btn.disabled=true;btn.textContent='正在浏览器打包...';}")
+        page.write("var JSZipCtor=await ensureJsZipLoaded();")
+        page.write("var zip=new JSZipCtor();")
+        page.write("var fileTasks=[];")
+        page.write("var scanState={scanned:0};")
+        page.write("for(var i=0;i<selected.length;i+=1){")
+        page.write("await collectFileTasks(selected[i],'',fileTasks,scanState);")
+        page.write("}")
+        page.write("if(fileTasks.length===0){throw new Error('未找到可打包文件');}")
+        page.write("for(var j=0;j<fileTasks.length;j+=1){")
+        page.write("var task=fileTasks[j];")
+        page.write("setZipProgress(true,'正在下载并写入 ZIP: '+(j+1)+'/'+fileTasks.length+' - '+task.name,25+Math.floor(((j+1)/fileTasks.length)*65));")
+        page.write("var fileResp=await fetch(task.url,{credentials:'same-origin'});")
+        page.write("if(!fileResp.ok){throw new Error('下载文件失败: '+task.name);}")
+        page.write("var blob=await fileResp.blob();")
+        page.write("zip.file(task.zipPath,blob);")
+        page.write("}")
+        page.write("setZipProgress(true,'正在生成 ZIP 文件...',92);")
+        page.write("var zipBlob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});")
+        page.write("var url=URL.createObjectURL(zipBlob);")
+        page.write("var a=document.createElement('a');")
+        page.write("a.href=url;")
+        page.write("a.download=inferZipName();")
+        page.write("document.body.appendChild(a);")
+        page.write("a.click();")
+        page.write("a.remove();")
+        page.write("setZipProgress(true,'打包完成，开始下载。',100);")
+        page.write("setTimeout(function(){URL.revokeObjectURL(url);},1000);")
+        page.write("}catch(err){")
+        page.write("setZipProgress(true,'打包失败: '+(err&&err.message?err.message:String(err)),0);")
+        page.write("alert('打包失败: '+(err&&err.message?err.message:String(err)));")
+        page.write("}finally{")
+        page.write("if(btn){btn.textContent=oldText;}")
+        page.write("updateSelectionState();")
+        page.write("setTimeout(function(){setZipProgress(false,'',0);},1200);")
+        page.write("}")
         page.write("}")
         page.write("var sortState={column:-1,ascending:true};")
         page.write("function parseSortValue(value,type){")
@@ -528,11 +708,13 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         page.write("parentRows.forEach(function(r){tbody.appendChild(r);});")
         page.write("dataRows.forEach(function(r){tbody.appendChild(r);});")
         page.write("Array.from(table.tHead.rows[0].cells).forEach(function(cell){")
+        page.write("if(!cell.getAttribute('onclick')){return;}")
         page.write("var txt=cell.textContent.replace(/[ ↑↓]$/,'');cell.textContent=txt;")
         page.write("});")
         page.write("th.textContent=th.textContent.replace(/[ ↑↓]$/,'')+(ascending?' ↑':' ↓');")
         page.write("sortState.column=columnIndex;sortState.ascending=ascending;")
         page.write("}")
+        page.write("updateSelectionState();")
         page.write("</script></body></html>")
         encoded = page.getvalue().encode("utf-8", "surrogateescape")
         response = io.BytesIO(encoded)
