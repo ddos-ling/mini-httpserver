@@ -16,7 +16,7 @@ from random import randint, choices
 from string import ascii_lowercase
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 BUILD_TIMESTAMP = ""
 BUILDBY = ""
 
@@ -433,11 +433,11 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         page.write("<p><button type='submit'>上传到当前目录</button></p>")
         page.write("</form>")
         page.write("</div><hr>")
-        page.write("<table style='border-collapse:collapse;min-width:720px;'>")
+        page.write("<table id='fileTable' style='border-collapse:collapse;min-width:720px;'>")
         page.write("<thead><tr>")
-        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;'>名称</th>")
-        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;'>修改时间</th>")
-        page.write("<th style='text-align:right;border-bottom:1px solid #ccc;padding:6px 10px;'>大小</th>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(0, 'text', this)\">名称</th>")
+        page.write("<th style='text-align:left;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(1, 'number', this)\">修改时间</th>")
+        page.write("<th style='text-align:right;border-bottom:1px solid #ccc;padding:6px 10px;cursor:pointer;user-select:none;' onclick=\"sortTable(2, 'number', this)\">大小</th>")
         page.write("</tr></thead><tbody>")
 
         if request_path not in ("/", ""):
@@ -445,10 +445,10 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             if not parent:
                 parent = "/"
             page.write(
-                "<tr>"
-                f"<td style='padding:6px 10px;'><a href='{html.escape(parent, quote=True)}'>.. (上级目录)</a></td>"
-                "<td style='padding:6px 10px;'>-</td>"
-                "<td style='padding:6px 10px;text-align:right;'>-</td>"
+                "<tr data-parent='1'>"
+                f"<td data-sort='' style='padding:6px 10px;'><a href='{html.escape(parent, quote=True)}'>.. (上级目录)</a></td>"
+                "<td data-sort='' style='padding:6px 10px;'>-</td>"
+                "<td data-sort='' style='padding:6px 10px;text-align:right;'>-</td>"
                 "</tr>"
             )
 
@@ -461,27 +461,36 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             elif os.path.islink(full_name):
                 display_name = name + "@"
 
+            sort_name = display_name.lower()
+            sort_mtime = -1
+            sort_size = -1
+
             try:
                 stat_result = os.stat(full_name)
                 modified_time = format_mtime(stat_result.st_mtime)
+                sort_mtime = int(stat_result.st_mtime)
                 if os.path.isdir(full_name):
                     size_text = "-"
                 else:
                     size_text = format_size(stat_result.st_size)
+                    sort_size = int(stat_result.st_size)
             except OSError:
                 modified_time = "-"
                 size_text = "-"
 
             page.write(
                 "<tr>"
-                "<td style='padding:6px 10px;'><a href='%s'>%s</a></td>"
-                "<td style='padding:6px 10px;'>%s</td>"
-                "<td style='padding:6px 10px;text-align:right;'>%s</td>"
+                "<td data-sort='%s' style='padding:6px 10px;'><a href='%s'>%s</a></td>"
+                "<td data-sort='%s' style='padding:6px 10px;'>%s</td>"
+                "<td data-sort='%s' style='padding:6px 10px;text-align:right;'>%s</td>"
                 "</tr>"
                 % (
+                    html.escape(sort_name, quote=True),
                     html.escape(link_name, quote=True),
                     html.escape(display_name, quote=False),
+                    html.escape(str(sort_mtime), quote=True),
                     html.escape(modified_time, quote=False),
+                    html.escape(str(sort_size), quote=True),
                     html.escape(size_text, quote=False),
                 )
             )
@@ -494,6 +503,35 @@ class UploadHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         page.write("var hidden=area.style.display==='none';")
         page.write("area.style.display=hidden?'block':'none';")
         page.write("btn.textContent=hidden?'收起上传区':'上传文件到当前目录';")
+        page.write("}")
+        page.write("var sortState={column:-1,ascending:true};")
+        page.write("function parseSortValue(value,type){")
+        page.write("if(type==='number'){var n=Number(value);return Number.isFinite(n)?n:-1;}return String(value||'').toLowerCase();")
+        page.write("}")
+        page.write("function sortTable(columnIndex,type,th){")
+        page.write("var table=document.getElementById('fileTable');")
+        page.write("if(!table||!table.tBodies||table.tBodies.length===0){return;}")
+        page.write("var tbody=table.tBodies[0];")
+        page.write("var rows=Array.from(tbody.rows);")
+        page.write("var parentRows=rows.filter(function(r){return r.getAttribute('data-parent')==='1';});")
+        page.write("var dataRows=rows.filter(function(r){return r.getAttribute('data-parent')!=='1';});")
+        page.write("var ascending=sortState.column===columnIndex?!sortState.ascending:true;")
+        page.write("dataRows.sort(function(a,b){")
+        page.write("var aCell=a.cells[columnIndex];var bCell=b.cells[columnIndex];")
+        page.write("var aRaw=aCell?aCell.getAttribute('data-sort'):'';var bRaw=bCell?bCell.getAttribute('data-sort'):'';")
+        page.write("var av=parseSortValue(aRaw,type);var bv=parseSortValue(bRaw,type);")
+        page.write("if(type==='number'){return ascending?(av-bv):(bv-av);}")
+        page.write("var cmp=String(av).localeCompare(String(bv),'zh-Hans-CN',{numeric:true,sensitivity:'base'});")
+        page.write("return ascending?cmp:-cmp;")
+        page.write("});")
+        page.write("while(tbody.firstChild){tbody.removeChild(tbody.firstChild);}")
+        page.write("parentRows.forEach(function(r){tbody.appendChild(r);});")
+        page.write("dataRows.forEach(function(r){tbody.appendChild(r);});")
+        page.write("Array.from(table.tHead.rows[0].cells).forEach(function(cell){")
+        page.write("var txt=cell.textContent.replace(/[ ↑↓]$/,'');cell.textContent=txt;")
+        page.write("});")
+        page.write("th.textContent=th.textContent.replace(/[ ↑↓]$/,'')+(ascending?' ↑':' ↓');")
+        page.write("sortState.column=columnIndex;sortState.ascending=ascending;")
         page.write("}")
         page.write("</script></body></html>")
         encoded = page.getvalue().encode("utf-8", "surrogateescape")
@@ -712,12 +750,3 @@ if __name__ == "__main__":
             print(f"启动服务器失败, 尝试新端口{PORT}")
     else:
         print("错误：无法启动服务器，所有尝试的端口都被占用。请尝试手动指定一个未被占用的端口。")
-
-
-
-
-
-
-
-
-
